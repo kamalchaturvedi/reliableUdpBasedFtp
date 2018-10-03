@@ -1,7 +1,7 @@
 --------------------------------------------------------------------------------------
 		Connectionless file transfer protocol(UDP FTP) Implementation
 ---------------------------------------------------------------------------------------
-Author: Kamal Chaturvedi (kamal.chaturvedi@gmail.com)
+Author: Kamal Chaturvedi (kamalchaturvedi15@gmail.com)
 ---------------------------------------------------------------------------------------
 This program is an implementation of a connectionless file transfer protocol(UDP FTP)
 
