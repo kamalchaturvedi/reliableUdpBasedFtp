@@ -1,5 +1,5 @@
 /*
- * udpserver.c - A simple UDP echo server
+ * udpserver.c - A Unreliable UDP echo server
  * usage: udpserver <port>
  */
 
@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,6 +23,14 @@
 #define RESPSIZE 64
 #define FILESIZE 64
 
+typedef struct packet_tr {
+	int type;
+	int sequenceNo;
+	int fileSize;
+	char data[BUFSIZE];
+	char fileName[FILESIZE];
+} transfer_packet;
+
 /*
  * error - wrapper for perror
  */
@@ -29,17 +38,16 @@ void error(char *msg) {
 	perror(msg);
 	exit(1);
 }
-void convertToCorrectForm(char *, char[][BUFSIZE]);
 int sendFileToClient(char *, struct sockaddr_in, int, int);
 int sendAll(int, FILE *, struct stat, struct sockaddr_in, int, char *);
 int min(int, int);
 int writeIntoFile(char[], char *);
+int exitServer(struct sockaddr_in, int, int);
 int sendDirectoryDetailsToClient(struct sockaddr_in, int, int);
 int deleteDirectoryOfFileNameReceived(char *, struct sockaddr_in, int, int);
 
 static currentSequenceCounter = -1;
 static char buf[BUFSIZE]; /* message buf */
-static char resp[RESPSIZE];
 
 int main(int argc, char **argv) {
 	int sockfd; /* socket */
@@ -103,10 +111,11 @@ int main(int argc, char **argv) {
 		 * recvfrom: receive a UDP datagram from a client
 		 */
 		bzero(buf, BUFSIZE);
-		bzero(resp, RESPSIZE);
 		memset(&clientaddr, 0, sizeof(clientaddr));
 		clientaddr.sin_family = AF_INET;
-		n = recvfrom(sockfd, buf, sizeof(buf), 0,
+		transfer_packet *packet = (transfer_packet*) malloc(
+				sizeof(transfer_packet));
+		n = recvfrom(sockfd, (char*) packet, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &clientaddr, &clientlen);
 		if (n < 0)
 			error("ERROR in recvfrom");
@@ -126,32 +135,34 @@ int main(int argc, char **argv) {
 			error("ERROR on inet_ntoa\n");
 		printf("server received datagram from %s (%s)\n", hostp->h_name,
 				hostaddrp);
-		printf("server received %d/%d bytes:\n", strlen(buf), n);
-		printf("%s \n", buf);
-		convertToCorrectForm(buf, &receivedData);
-		int receivedCounter = stringToInt(receivedData[1]);
+		printf("server received %d/%d bytes:\n", sizeof(packet), n);
+		// convertToCorrectForm(buf, &receivedData);
+		int receivedCounter = packet->sequenceNo;
 		if (currentSequenceCounter < receivedCounter) {
 			currentSequenceCounter = receivedCounter;
-			switch ((int) (receivedData[0][0] - '0')) {
+			switch (packet->type) {
 			case 1:
-				writeIntoFile(&receivedData[3], receivedData[2]);
-				bzero(resp, RESPSIZE);
-				sprintf(resp, "Received %d bytes from file %s",
-						(int) strlen(receivedData[3]), receivedData[2]);
-				n = sendto(sockfd, resp, strlen(resp), 0,
-						(struct sockaddr *) &clientaddr, clientlen);
+				writeIntoFile(packet->data, packet->fileName);
+				// bzero(resp, RESPSIZE);
+				transfer_packet *response = (transfer_packet*) malloc(
+						sizeof(transfer_packet));
+				sprintf(response->data, "Received %d bytes from file %s",
+						(int) strlen(packet->data), packet->fileName);
+				response->sequenceNo = currentSequenceCounter;
+				n = sendto(sockfd, (char *) response, sizeof(transfer_packet),
+						0, (struct sockaddr *) &clientaddr, clientlen);
 				if (n < 0)
 					error("ERROR in sendto");
 				break;
 			case 2:
-				sendFileToClient(receivedData[2], clientaddr, clientlen,
+				sendFileToClient(packet->fileName, clientaddr, clientlen,
 						sockfd);
 				break;
 			case 3:
 				sendDirectoryDetailsToClient(clientaddr, clientlen, sockfd);
 				break;
 			case 4:
-				deleteDirectoryOfFileNameReceived(receivedData[2], clientaddr,
+				deleteDirectoryOfFileNameReceived(packet->fileName, clientaddr,
 						clientlen, sockfd);
 				break;
 			case 5:
@@ -161,6 +172,7 @@ int main(int argc, char **argv) {
 				break;
 			}
 		}
+		free(packet);
 	}
 }
 
@@ -182,14 +194,19 @@ int deleteDirectoryOfFileNameReceived(char *fileName,
 	int n = 0;
 	bzero(buf, BUFSIZE);
 	struct stat s;
-
+	transfer_packet *response = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
+	printf("%s", fileName);
 	if (remove(fileName) == 0) {
 		sprintf(buf, "Deleted file %s successfully\n", fileName);
 	} else {
 		sprintf(buf, "Error in deleting file : %s\n", fileName);
 	}
-	n = sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *) &clientaddr,
-			clientlen);
+	response->sequenceNo = currentSequenceCounter;
+	strcpy(response->data, buf);
+	n = sendto(sockfd, (char *) response, sizeof(transfer_packet), 0,
+			(struct sockaddr *) &clientaddr, clientlen);
+	free(response);
 	if (n < 0)
 		error("ERROR in sendto");
 
@@ -199,8 +216,9 @@ int sendDirectoryDetailsToClient(struct sockaddr_in clientaddr, int clientlen,
 		int sockfd) {
 	int n = 0;
 	bzero(buf, BUFSIZE);
-
 	// getting current directory details
+	transfer_packet *response = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
 	DIR *directory;
 	struct dirent *directoryEntry;
 	directory = opendir(".");
@@ -211,39 +229,43 @@ int sendDirectoryDetailsToClient(struct sockaddr_in clientaddr, int clientlen,
 		}
 		closedir(directory);
 	}
-	n = sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *) &clientaddr,
-			clientlen);
+	strcpy(response->data, buf);
+	response->sequenceNo = currentSequenceCounter;
+	/*n = sendto(sockfd, (char *) response, sizeof(transfer_packet), 0,
+	 (struct sockaddr *) &clientaddr, clientlen);*/
+	n = sendPacket(sockfd, (char*) response, sizeof(transfer_packet), clientlen,
+			clientaddr);
+	free(response);
 	if (n < 0)
 		error("ERROR in sendto");
 	return n;
 }
-void convertToCorrectForm(char buf[], char receivedData[][BUFSIZE]) {
-	int j = 0, counter = 0;
-	for (int i = 0; i <= (strlen(buf)); i++) {
-		// if space or NULL found, assign NULL into newString[ctr]
-		if ((counter < 3) && (buf[i] == ':' || buf[i] == '\0')) {
-			receivedData[counter][j] = '\0';
-			counter++;  //for next word
-			j = 0;    //for next word, init index to 0
-		} else {
-			receivedData[counter][j] = buf[i];
-			j++;
-		}
-	}
+int sendPacket(int sockfd, char *action, int sizeToBeSent, int serverlen,
+		struct sockaddr_in serveraddr) {
+	struct timeval wait;
+	fd_set readTemplate;
+	int n, sentSize;
+	transfer_packet *response = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
+	n = sendto(sockfd, action, sizeToBeSent, 0, (struct sockaddr*) &serveraddr,
+			serverlen);
+	printf("\n Sent datagram \n");
+	return n;
 }
 int sendFileToClient(char *fileName, struct sockaddr_in clientaddr,
 		int clientlen, int sockfd) {
 	int n = 0;
-	bzero(buf, BUFSIZE);
+	transfer_packet *dataPacket = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
 	struct stat s;
 
 	if (stat(fileName, &s) == -1) {
 		printf("File info not available");
 		return -1;
 	}
-	sprintf(buf, "%d", (int) s.st_size);
-	n = sendto(sockfd, buf, sizeof(buf), 0, (struct sockaddr *) &clientaddr,
-			clientlen);
+	dataPacket->fileSize = (int) s.st_size;
+	n = sendto(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
+			(struct sockaddr *) &clientaddr, clientlen);
 	if (n < 0)
 		error("ERROR in sendto");
 	FILE *f = fopen(fileName, "rb");
@@ -251,9 +273,8 @@ int sendFileToClient(char *fileName, struct sockaddr_in clientaddr,
 		printf("Cannot read from file");
 		return -1;
 	}
-	bzero(buf, BUFSIZE);
-	n = recvfrom(sockfd, buf, sizeof(buf), 0, (struct sockaddr *) &clientaddr,
-			&clientlen);
+	n = recvfrom(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
+			(struct sockaddr *) &clientaddr, &clientlen);
 	if (n < 0)
 		error("ERROR in recvfrom");
 	n = sendAll(sockfd, f, s, clientaddr, clientlen, fileName);
@@ -262,18 +283,20 @@ int sendFileToClient(char *fileName, struct sockaddr_in clientaddr,
 		return -1;
 	}
 	fclose(f);
+	free(dataPacket);
 	return 1;
 }
 int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in clientaddr,
 		int clientlen, char *fileName) {
-	//tell server that I will send a file of name provided
+//tell server that I will send a file of name provided
 	int64_t size = s.st_size;
 	int n;
+	transfer_packet *dataPacket = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
 	printf("File size is %d \n", (int) size);
 	int fileSizeSent = 0, sizeToBeSentPerIteration = 0, totalSizeSent = 0;
 	while (size > 0) {
 		bzero(buf, BUFSIZE);
-		bzero(resp, BUFSIZE);
 		sizeToBeSentPerIteration = min(sizeof(buf), size);
 		printf("Reading %d bytes", sizeToBeSentPerIteration);
 		int readFromFile = fread(buf, 1, sizeToBeSentPerIteration, f);
@@ -281,16 +304,18 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in clientaddr,
 			printf("The file sequence cannot be read \n");
 			return -1;
 		}
-		fileSizeSent = sendto(sockfd, buf, readFromFile, 0,
+		strcpy(dataPacket->data, buf);
+		fileSizeSent = strlen(buf);
+		sendto(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &clientaddr, clientlen);
 		printf("\n Sent datagram \n");
 
 		//getting ack back from the server
-		n = recvfrom(sockfd, resp, sizeof(resp), 0,
+		n = recvfrom(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &clientaddr, &clientlen);
 		if (n < 0)
 			error("ERROR in recvfrom");
-		printf("Echo from client: %s \n", resp);
+		printf("Echo from client: %s \n", dataPacket->data);
 
 		size = size - fileSizeSent;
 		totalSizeSent = totalSizeSent + fileSizeSent;
@@ -334,4 +359,3 @@ int stringToInt(char * resp) {
 	}
 	return valueToReturn;
 }
-
