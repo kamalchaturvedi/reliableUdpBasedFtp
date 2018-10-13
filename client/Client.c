@@ -1,6 +1,6 @@
 /*
- * udpclient.c - A Reliable UDP client
- * usage: udpclient <host> <port>
+ * Client.c - A Reliable UDP client
+ * usage: Client <host> <port>
  */
 
 #include <bits/stdint-intn.h>
@@ -45,6 +45,9 @@ int min(int, int);
 int stringToInt(char *);
 int sendAndReceiveReliably(int, char *, int, int, struct sockaddr_in);
 static int sequenceCounter = 0;
+/*
+ * main - starting point of the client
+ */
 int main(int argc, char **argv) {
 	int sockfd, portno, n;
 	int serverlen;
@@ -119,7 +122,9 @@ int main(int argc, char **argv) {
 
 	return 0;
 }
-
+/*
+ * prepareToExitServer - handle exiting the server
+ */
 int prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen) {
 	int n = 0;
@@ -132,6 +137,9 @@ int prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
 	free(packet);
 	return n;
 }
+/*
+ * prepareToDeleteFileFromServer - handle deleting a file from the server
+ */
 int prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
 	int n = 0;
@@ -145,6 +153,9 @@ int prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
 	free(packet);
 	return n;
 }
+/*
+ * prepareToGetListFromServer - handle getting the directory information from the server
+ */
 int prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen) {
 	int n = 0;
@@ -157,6 +168,9 @@ int prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
 	free(packet);
 	return n;
 }
+/*
+ * prepareToGetFromServer - handle getting the specified file from the server
+ */
 int prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
 	int n = 0;
@@ -192,7 +206,9 @@ int prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
 
 	return n;
 }
-
+/*
+ * prepareToSendFileToServer - handle getting the specified file from the server
+ */
 int prepareToSendFileToServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
 	struct stat s;
@@ -214,7 +230,9 @@ int prepareToSendFileToServer(int sockfd, struct sockaddr_in serveraddr,
 	fclose(f);
 	return 1;
 }
-
+/*
+ * sendAll - send the specified file to the server
+ */
 int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
 	int64_t size = s.st_size;
@@ -249,6 +267,9 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
 			totalSizeSent);
 	return 1;
 }
+/*
+ * sendAndReceiveReliably - handles the reliability aspect of sending and receiving data to/from the server respectively
+ */
 int sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
 		int serverlen, struct sockaddr_in serveraddr) {
 	struct timeval wait;
@@ -278,6 +299,9 @@ int sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
 	}
 	return 1;
 }
+/*
+ * writeIntoFile - handles writing to file after getting data from the server
+ */
 int writeIntoFile(char *buf, char *fileName, int n) {
 	int writingIntoFile;
 	FILE *openingFileForWriting = fopen(fileName, "ab");
@@ -296,13 +320,18 @@ int writeIntoFile(char *buf, char *fileName, int n) {
 	}
 	return 1;
 }
-
+/*
+ * min - helper function to find min btwn two values
+ */
 int min(int val0, int val1) {
 	if (val0 < val1)
 		return val0;
 	else
 		return val1;
 }
+/*
+ * stringToInt - helper function to convert a string to a integer
+ */
 int stringToInt(char * resp) {
 	int i = 0, temp = 0, valueToReturn = 0;
 	while (resp[i] != '\0') {
