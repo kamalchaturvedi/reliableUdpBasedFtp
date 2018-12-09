@@ -3,6 +3,9 @@
  * usage: Client <host> <port>
  */
 
+#include <bits/stdint-intn.h>
+#include <bits/types/FILE.h>
+#include <bits/types/struct_timeval.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -12,7 +15,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include<inttypes.h>
+
 #define BUFSIZE 1024
 #define FILESIZE 64
 #define RESPSIZE 1024
@@ -33,21 +36,20 @@ void error(char *msg) {
 	exit(0);
 }
 int prepareToSendFileToServer(int, struct sockaddr_in, int, char *);
-void prepareToExitServer(int, struct sockaddr_in, int);
-void prepareToDeleteFileFromServer(int, struct sockaddr_in, int, char *);
-void prepareToGetListFromServer(int, struct sockaddr_in, int);
-void prepareToGetFromServer(int, struct sockaddr_in, int, char *);
+int prepareToExitServer(int, struct sockaddr_in, int);
+int prepareToDeleteFileFromServer(int, struct sockaddr_in, int, char *);
+int prepareToGetListFromServer(int, struct sockaddr_in, int);
 int writeIntoFile(char *, char *, int);
 int sendAll(int, FILE *, struct stat, struct sockaddr_in, int, char *);
 int min(int, int);
 int stringToInt(char *);
-transfer_packet* sendAndReceiveReliably(int, char *, int, int, struct sockaddr_in);
+int sendAndReceiveReliably(int, char *, int, int, struct sockaddr_in);
 static int sequenceCounter = 0;
 /*
  * main - starting point of the client
  */
 int main(int argc, char **argv) {
-	int sockfd, portno;
+	int sockfd, portno, n;
 	int serverlen;
 	struct sockaddr_in serveraddr;
 	struct hostent *server;
@@ -64,7 +66,7 @@ int main(int argc, char **argv) {
 	portno = atoi(argv[2]);
 
 	/* socket: create the socket */
-	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sockfd < 0)
 		error("ERROR opening socket");
 
@@ -88,7 +90,6 @@ int main(int argc, char **argv) {
 				"Hello there \n Enter the task number from below to execute \n 1. Add a file to the server\n 2. Get a file from the server\n 3. List files in the server \n 4. Delete a file from the server\n 5. Exit server\n");
 		scanf("%d", &taskChosen);
 		printf("\nTask chosen is %d \n", taskChosen);
-		bzero(fileSelected,FILESIZE);
 		switch (taskChosen) {
 		case 1:
 			printf("\nEnter the file name to be pushed to server\n");
@@ -124,57 +125,64 @@ int main(int argc, char **argv) {
 /*
  * prepareToExitServer - handle exiting the server
  */
-void prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
+int prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen) {
+	int n = 0;
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 5;
 	packet->sequenceNo = sequenceCounter++;
-	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
+	return n;
 }
 /*
  * prepareToDeleteFileFromServer - handle deleting a file from the server
  */
-void prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
+int prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
+	int n = 0;
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 4;
 	packet->sequenceNo = sequenceCounter++;
 	strcpy(packet->fileName, fileName);
-	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
+	return n;
 }
 /*
  * prepareToGetListFromServer - handle getting the directory information from the server
  */
-void prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
+int prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen) {
+	int n = 0;
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 3;
 	packet->sequenceNo = sequenceCounter++;
-	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
+	return n;
 }
 /*
  * prepareToGetFromServer - handle getting the specified file from the server
  */
-void prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
+int prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
-	socklen_t sendSize;
+	int n = 0;
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 2;
 	packet->sequenceNo = sequenceCounter++;
 	int fileSize = 0, sizeReceived = 0;
 	strcpy(packet->fileName, fileName);
-	fileSize = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
-			serverlen, serveraddr)->fileSize;
+	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+			serverlen, serveraddr);
+	fileSize = n;
 	printf("Size of the file is %d", fileSize);
 	bzero(packet->data, RESPSIZE);
 	strcpy(packet->data, "ok");
@@ -184,18 +192,19 @@ void prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
 	while (sizeReceived < fileSize) {
 		bzero(packet->data, RESPSIZE);
 		bzero(buf, BUFSIZE);
-		sendSize = sizeof(serverlen);
 		recvfrom(sockfd, (char*) packet, sizeof(transfer_packet), 0,
-				(struct sockaddr *) &serveraddr, &sendSize);
-		writeIntoFile(packet->data, fileName, strlen(packet->data));
+				(struct sockaddr *) &serveraddr, &serverlen);
+		writeIntoFile(packet->data, fileName, sizeof(packet->data));
 		bzero(packet->data, RESPSIZE);
-		sprintf(buf, "Received %lu bytes from file %s", strlen(packet->data), fileName);
-		sizeReceived += strlen(packet->data);
+		sprintf(buf, "Received %d bytes from file %s", n, fileName);
 		strcpy(packet->data, buf);
 		sendto(sockfd, (char*) packet, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &serveraddr, serverlen);
 		printf("\n Sent datagram \n");
+		sizeReceived += n;
 	}
+
+	return n;
 }
 /*
  * prepareToSendFileToServer - handle getting the specified file from the server
@@ -227,9 +236,10 @@ int prepareToSendFileToServer(int sockfd, struct sockaddr_in serveraddr,
 int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
 		int serverlen, char *fileName) {
 	int64_t size = s.st_size;
-	int sequenceNo;
-	printf("File size is %" PRId64 "\n", size);
-	int fileSizeSent = 0, sizeToBeSentPerIteration = 0, totalSizeSent = 0;
+	int n, sequenceNo;
+	printf("File size is %d \n", size);
+	int fileSizeSent = 0, sizeToBeSentPerIteration = 0, totalSizeSent = 0,
+			actionSize = 0;
 	transfer_packet *packet;
 	while (size > 0) {
 		packet = (transfer_packet *) malloc(sizeof(transfer_packet));
@@ -260,12 +270,11 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
 /*
  * sendAndReceiveReliably - handles the reliability aspect of sending and receiving data to/from the server respectively
  */
-transfer_packet* sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
+int sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
 		int serverlen, struct sockaddr_in serveraddr) {
 	struct timeval wait;
 	fd_set readTemplate;
-	socklen_t sendSize;
-	int n;
+	int n, sentSize;
 	transfer_packet *response = (transfer_packet*) malloc(
 			sizeof(transfer_packet));
 	while (1) {
@@ -279,9 +288,8 @@ transfer_packet* sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSe
 		if ((n = select(FD_SETSIZE, &readTemplate, NULL, NULL, &wait)) <= 0) {
 			printf("Timed out : sending packet again\n");
 		} else if (FD_ISSET(sockfd, &readTemplate)) {
-			sendSize = sizeof(serverlen);
 			if (recvfrom(sockfd, (char*) response, sizeof(transfer_packet), 0,
-					(struct sockaddr*) &serveraddr, &sendSize) < 0) {
+					(struct sockaddr*) &serveraddr, &serverlen) < 0) {
 				perror("Error in server acknowledgment");
 				exit(1);
 			}
@@ -289,7 +297,7 @@ transfer_packet* sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSe
 			break;
 		}
 	}
-	return response;
+	return 1;
 }
 /*
  * writeIntoFile - handles writing to file after getting data from the server
@@ -302,7 +310,7 @@ int writeIntoFile(char *buf, char *fileName, int n) {
 	} else {
 		writingIntoFile = fwrite(buf, 1, n, openingFileForWriting);
 		fflush(openingFileForWriting);
-		printf(" \n \n Wrote %d out of %lu into file \n \n", writingIntoFile,
+		printf(" \n \n Wrote %d out of %d into file \n \n", writingIntoFile,
 				strlen(buf));
 		if (writingIntoFile < 0) {
 			printf("\n\n The file sequence cannot be written \n\n");

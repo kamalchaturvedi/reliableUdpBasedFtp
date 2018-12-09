@@ -4,6 +4,9 @@
  */
 
 #include <arpa/inet.h>
+#include <asm-generic/socket.h>
+#include <bits/stdint-intn.h>
+#include <bits/types/FILE.h>
 #include <dirent.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -37,27 +40,26 @@ void error(char *msg) {
 }
 int sendFileToClient(char *, struct sockaddr_in, int, int);
 int sendAll(int, FILE *, struct stat, struct sockaddr_in, int, char *);
-int sendPacket(int, char *, int, int, struct sockaddr_in);
 int min(int, int);
 int writeIntoFile(char[], char *);
 int exitServer(struct sockaddr_in, int, int);
 int sendDirectoryDetailsToClient(struct sockaddr_in, int, int);
 int deleteDirectoryOfFileNameReceived(char *, struct sockaddr_in, int, int);
 
-static int currentSequenceCounter = -1;
+static currentSequenceCounter = -1;
 static char buf[BUFSIZE]; /* message buf */
 
 int main(int argc, char **argv) {
 	int sockfd; /* socket */
 	int portno; /* port to listen on */
 	int clientlen; /* byte size of client's address */
-	struct sockaddr_in serveraddr;/* server's addr */
+	struct sockaddr_in serveraddr; /* server's addr */
 	struct sockaddr_in clientaddr; /* client addr */
 	struct hostent *hostp; /* client host info */
 	char *hostaddrp; /* dotted decimal host addr string */
 	int optval; /* flag value for setsockopt */
 	int n; /* message byte size */
-	socklen_t sendSize;
+	char receivedData[4][BUFSIZE];
 	/*
 	 * check command line arguments
 	 */
@@ -70,7 +72,7 @@ int main(int argc, char **argv) {
 	/*
 	 * socket: create the parent socket
 	 */
-	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (sockfd < 0)
 		error("ERROR opening socket");
 
@@ -86,10 +88,11 @@ int main(int argc, char **argv) {
 	/*
 	 * build the server's Internet address
 	 */
-	bzero((char * ) &serveraddr, sizeof(serveraddr));
-	serveraddr.sin_family = PF_INET;
+	bzero((char *) &serveraddr, sizeof(serveraddr));
+	serveraddr.sin_family = AF_INET;
 	serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serveraddr.sin_port = htons((unsigned short ) portno);
+	serveraddr.sin_port = htons((unsigned short) portno);
+
 	/*
 	 * bind: associate the parent socket with a port
 	 */
@@ -101,7 +104,7 @@ int main(int argc, char **argv) {
 	 */
 	clientlen = sizeof(clientaddr);
 	printf(
-			"Ola ! Server here. You can perform the following tasks & send task id to server \n 1. Add a file to the server\n 2. Get a file from the server\n 3. List files in the server \n 4. Delete a file from the server\n");
+			"Ola ! Server here. Client can perform the following tasks & send task id to server \n 1. Add a file to the server\n 2. Get a file from the server\n 3. List files in the server \n 4. Delete a file from the server\n");
 
 	while (1) {
 		/*
@@ -112,16 +115,16 @@ int main(int argc, char **argv) {
 		clientaddr.sin_family = AF_INET;
 		transfer_packet *packet = (transfer_packet*) malloc(
 				sizeof(transfer_packet));
-		sendSize = sizeof(clientlen);
 		n = recvfrom(sockfd, (char*) packet, sizeof(transfer_packet), 0,
-				(struct sockaddr *) &clientaddr, &sendSize);
+				(struct sockaddr *) &clientaddr, &clientlen);
 		if (n < 0)
 			error("ERROR in recvfrom");
 
 		/*
 		 * gethostbyaddr: determine who sent the datagram
 		 */
-		hostp = gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,sizeof(clientaddr.sin_addr.s_addr), AF_INET);
+		hostp = gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,
+				sizeof(clientaddr.sin_addr.s_addr), AF_INET);
 		if (hostp == NULL) {
 			printf("ERROR on gethostbyaddr : %s", hstrerror(h_errno));
 			return -1;
@@ -132,7 +135,7 @@ int main(int argc, char **argv) {
 			error("ERROR on inet_ntoa\n");
 		printf("server received datagram from %s (%s)\n", hostp->h_name,
 				hostaddrp);
-		printf("server received %lu/%d bytes:\n", sizeof(packet), n);
+		printf("server received %d/%d bytes:\n", sizeof(packet), n);
 		// convertToCorrectForm(buf, &receivedData);
 		int receivedCounter = packet->sequenceNo;
 		if (currentSequenceCounter < receivedCounter) {
@@ -144,7 +147,7 @@ int main(int argc, char **argv) {
 				transfer_packet *response = (transfer_packet*) malloc(
 						sizeof(transfer_packet));
 				sprintf(response->data, "Received %d bytes from file %s",
-						(int ) strlen(packet->data), packet->fileName);
+						(int) strlen(packet->data), packet->fileName);
 				response->sequenceNo = currentSequenceCounter;
 				n = sendto(sockfd, (char *) response, sizeof(transfer_packet),
 						0, (struct sockaddr *) &clientaddr, clientlen);
@@ -176,6 +179,7 @@ int main(int argc, char **argv) {
 int exitServer(struct sockaddr_in clientaddr, int clientlen, int sockfd) {
 	int n = 0;
 	bzero(buf, BUFSIZE);
+	struct stat s;
 	sprintf(buf, "Server will shutdown now\n");
 	n = sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *) &clientaddr,
 			clientlen);
@@ -189,6 +193,7 @@ int deleteDirectoryOfFileNameReceived(char *fileName,
 		struct sockaddr_in clientaddr, int clientlen, int sockfd) {
 	int n = 0;
 	bzero(buf, BUFSIZE);
+	struct stat s;
 	transfer_packet *response = (transfer_packet*) malloc(
 			sizeof(transfer_packet));
 	printf("%s", fileName);
@@ -237,7 +242,11 @@ int sendDirectoryDetailsToClient(struct sockaddr_in clientaddr, int clientlen,
 }
 int sendPacket(int sockfd, char *action, int sizeToBeSent, int serverlen,
 		struct sockaddr_in serveraddr) {
-	int n;
+	struct timeval wait;
+	fd_set readTemplate;
+	int n, sentSize;
+	transfer_packet *response = (transfer_packet*) malloc(
+			sizeof(transfer_packet));
 	n = sendto(sockfd, action, sizeToBeSent, 0, (struct sockaddr*) &serveraddr,
 			serverlen);
 	printf("\n Sent datagram \n");
@@ -246,7 +255,6 @@ int sendPacket(int sockfd, char *action, int sizeToBeSent, int serverlen,
 int sendFileToClient(char *fileName, struct sockaddr_in clientaddr,
 		int clientlen, int sockfd) {
 	int n = 0;
-	socklen_t sendSize;
 	transfer_packet *dataPacket = (transfer_packet*) malloc(
 			sizeof(transfer_packet));
 	struct stat s;
@@ -265,9 +273,8 @@ int sendFileToClient(char *fileName, struct sockaddr_in clientaddr,
 		printf("Cannot read from file");
 		return -1;
 	}
-	sendSize = sizeof(clientlen);
 	n = recvfrom(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
-			(struct sockaddr *) &clientaddr, &sendSize);
+			(struct sockaddr *) &clientaddr, &clientlen);
 	if (n < 0)
 		error("ERROR in recvfrom");
 	n = sendAll(sockfd, f, s, clientaddr, clientlen, fileName);
@@ -283,7 +290,6 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in clientaddr,
 		int clientlen, char *fileName) {
 //tell server that I will send a file of name provided
 	int64_t size = s.st_size;
-	socklen_t sendSize;
 	int n;
 	transfer_packet *dataPacket = (transfer_packet*) malloc(
 			sizeof(transfer_packet));
@@ -303,10 +309,10 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in clientaddr,
 		sendto(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &clientaddr, clientlen);
 		printf("\n Sent datagram \n");
-		sendSize = sizeof(clientlen);
+
 		//getting ack back from the server
 		n = recvfrom(sockfd, (char*) dataPacket, sizeof(transfer_packet), 0,
-				(struct sockaddr *) &clientaddr, &sendSize);
+				(struct sockaddr *) &clientaddr, &clientlen);
 		if (n < 0)
 			error("ERROR in recvfrom");
 		printf("Echo from client: %s \n", dataPacket->data);
