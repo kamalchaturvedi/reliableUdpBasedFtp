@@ -3,9 +3,6 @@
  * usage: Client <host> <port>
  */
 
-#include <bits/stdint-intn.h>
-#include <bits/types/FILE.h>
-#include <bits/types/struct_timeval.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -15,19 +12,21 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-
+#include<inttypes.h>
 #define BUFSIZE 1024
-#define FILESIZE 64
 #define RESPSIZE 1024
+#define FILESIZE 64
 
 static char buf[BUFSIZE];
+#pragma pack(1)
 typedef struct packet_tr {
 	int type;
 	int sequenceNo;
 	int fileSize;
-	char data[RESPSIZE];
 	char fileName[FILESIZE];
+	char data[RESPSIZE];
 } transfer_packet;
+#pragma pack()
 /*
  * error - wrapper for perror
  */
@@ -35,22 +34,23 @@ void error(char *msg) {
 	perror(msg);
 	exit(0);
 }
-int prepareToSendFileToServer(int, struct sockaddr_in, int, char *);
-int prepareToExitServer(int, struct sockaddr_in, int);
-int prepareToDeleteFileFromServer(int, struct sockaddr_in, int, char *);
-int prepareToGetListFromServer(int, struct sockaddr_in, int);
+int prepareToSendFileToServer(int, struct sockaddr_in, socklen_t, char *);
+void prepareToExitServer(int, struct sockaddr_in, socklen_t);
+void prepareToDeleteFileFromServer(int, struct sockaddr_in, socklen_t, char *);
+void prepareToGetListFromServer(int, struct sockaddr_in, socklen_t);
+void prepareToGetFromServer(int, struct sockaddr_in, socklen_t, char *);
 int writeIntoFile(char *, char *, int);
-int sendAll(int, FILE *, struct stat, struct sockaddr_in, int, char *);
+int sendAll(int, FILE *, struct stat, struct sockaddr_in, socklen_t, char *);
 int min(int, int);
 int stringToInt(char *);
-int sendAndReceiveReliably(int, char *, int, int, struct sockaddr_in);
+transfer_packet* sendAndReceiveReliably(int, char *, int, socklen_t, struct sockaddr_in);
 static int sequenceCounter = 0;
 /*
  * main - starting point of the client
  */
 int main(int argc, char **argv) {
-	int sockfd, portno, n;
-	int serverlen;
+	int sockfd, portno;
+	socklen_t serverlen;
 	struct sockaddr_in serveraddr;
 	struct hostent *server;
 	char *hostname;
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
 	portno = atoi(argv[2]);
 
 	/* socket: create the socket */
-	sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+	sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (sockfd < 0)
 		error("ERROR opening socket");
 
@@ -90,6 +90,7 @@ int main(int argc, char **argv) {
 				"Hello there \n Enter the task number from below to execute \n 1. Add a file to the server\n 2. Get a file from the server\n 3. List files in the server \n 4. Delete a file from the server\n 5. Exit server\n");
 		scanf("%d", &taskChosen);
 		printf("\nTask chosen is %d \n", taskChosen);
+		bzero(fileSelected,FILESIZE);
 		switch (taskChosen) {
 		case 1:
 			printf("\nEnter the file name to be pushed to server\n");
@@ -125,64 +126,57 @@ int main(int argc, char **argv) {
 /*
  * prepareToExitServer - handle exiting the server
  */
-int prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
-		int serverlen) {
-	int n = 0;
+void prepareToExitServer(int sockfd, struct sockaddr_in serveraddr,
+		socklen_t serverlen) {
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 5;
 	packet->sequenceNo = sequenceCounter++;
-	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
-	return n;
 }
 /*
  * prepareToDeleteFileFromServer - handle deleting a file from the server
  */
-int prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
-		int serverlen, char *fileName) {
-	int n = 0;
+void prepareToDeleteFileFromServer(int sockfd, struct sockaddr_in serveraddr,
+		socklen_t serverlen, char *fileName) {
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 4;
 	packet->sequenceNo = sequenceCounter++;
 	strcpy(packet->fileName, fileName);
-	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
-	return n;
 }
 /*
  * prepareToGetListFromServer - handle getting the directory information from the server
  */
-int prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
-		int serverlen) {
-	int n = 0;
+void prepareToGetListFromServer(int sockfd, struct sockaddr_in serveraddr,
+		socklen_t serverlen) {
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 3;
 	packet->sequenceNo = sequenceCounter++;
-	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+	sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 			serverlen, serveraddr);
 	free(packet);
-	return n;
 }
 /*
  * prepareToGetFromServer - handle getting the specified file from the server
  */
-int prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
-		int serverlen, char *fileName) {
-	int n = 0;
+void prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
+		socklen_t serverlen, char *fileName) {
 	transfer_packet *packet = (transfer_packet *) malloc(
 			sizeof(transfer_packet));
 	packet->type = 2;
 	packet->sequenceNo = sequenceCounter++;
-	int fileSize = 0, sizeReceived = 0;
-	strcpy(packet->fileName, fileName);
-	n = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
-			serverlen, serveraddr);
-	fileSize = n;
+	int fileSize = 0, sizeReceived = 0, currentPacketSize = 0;
+	bzero(packet->fileName, FILESIZE);
+	strncpy(packet->fileName, fileName, strlen(fileName));
+	fileSize = sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
+			serverlen, serveraddr)->fileSize;
 	printf("Size of the file is %d", fileSize);
 	bzero(packet->data, RESPSIZE);
 	strcpy(packet->data, "ok");
@@ -194,23 +188,23 @@ int prepareToGetFromServer(int sockfd, struct sockaddr_in serveraddr,
 		bzero(buf, BUFSIZE);
 		recvfrom(sockfd, (char*) packet, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &serveraddr, &serverlen);
-		writeIntoFile(packet->data, fileName, sizeof(packet->data));
+		currentPacketSize = min(sizeof(packet->data), (fileSize-sizeReceived));
+		writeIntoFile(packet->data, fileName, currentPacketSize);
+		sizeReceived += currentPacketSize;
 		bzero(packet->data, RESPSIZE);
-		sprintf(buf, "Received %d bytes from file %s", n, fileName);
-		strcpy(packet->data, buf);
+		sprintf(buf, "Received %d bytes from file %s", currentPacketSize, fileName);
+		strncpy(packet->data, buf, strlen(buf));
+		packet->sequenceNo = sequenceCounter++;
 		sendto(sockfd, (char*) packet, sizeof(transfer_packet), 0,
 				(struct sockaddr *) &serveraddr, serverlen);
 		printf("\n Sent datagram \n");
-		sizeReceived += n;
 	}
-
-	return n;
 }
 /*
  * prepareToSendFileToServer - handle getting the specified file from the server
  */
 int prepareToSendFileToServer(int sockfd, struct sockaddr_in serveraddr,
-		int serverlen, char *fileName) {
+		socklen_t serverlen, char *fileName) {
 	struct stat s;
 	//start sending one by one until all is sent
 	if (stat(fileName, &s) == -1) {
@@ -234,34 +228,32 @@ int prepareToSendFileToServer(int sockfd, struct sockaddr_in serveraddr,
  * sendAll - send the specified file to the server
  */
 int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
-		int serverlen, char *fileName) {
+		socklen_t serverlen, char *fileName) {
 	int64_t size = s.st_size;
-	int n, sequenceNo;
-	printf("File size is %d \n", size);
-	int fileSizeSent = 0, sizeToBeSentPerIteration = 0, totalSizeSent = 0,
-			actionSize = 0;
+	printf("File size is %" PRId64 "\n", size);
+	int sizeToBeSentPerIteration = 0, totalSizeSent = 0;
 	transfer_packet *packet;
 	while (size > 0) {
 		packet = (transfer_packet *) malloc(sizeof(transfer_packet));
-		sequenceNo = sequenceCounter++;
-		bzero(buf, BUFSIZE);
-		sizeToBeSentPerIteration = min(sizeof(buf), size);
+		sizeToBeSentPerIteration = min(BUFSIZE, size);
 		printf("Reading %d bytes", sizeToBeSentPerIteration);
-		int readFromFile = fread(buf, 1, sizeToBeSentPerIteration, f);
+		bzero(packet->data, BUFSIZE);
+		int readFromFile = fread(packet->data, sizeToBeSentPerIteration,1, f);
 		if (readFromFile < 0) {
 			printf("The file sequence cannot be read \n");
 			return -1;
 		}
-		fileSizeSent = sizeToBeSentPerIteration;
 		packet->type = 1;
 		packet->sequenceNo = sequenceCounter++;
-		strcpy(packet->data, buf);
-		strcpy(packet->fileName, fileName);
+		packet->fileSize = sizeToBeSentPerIteration;
+		bzero(packet->fileName, FILESIZE);
+		strncpy(packet->fileName, fileName,strlen(fileName));
+	
 		sendAndReceiveReliably(sockfd, (char *) packet, sizeof(transfer_packet),
 				serverlen, serveraddr);
 		free(packet);
-		size = size - fileSizeSent;
-		totalSizeSent = totalSizeSent + fileSizeSent;
+		size = size - sizeToBeSentPerIteration;
+		totalSizeSent = totalSizeSent + sizeToBeSentPerIteration;
 	}
 	printf("Successfully sent the file to server : %d bytes! \n",
 			totalSizeSent);
@@ -270,11 +262,11 @@ int sendAll(int sockfd, FILE *f, struct stat s, struct sockaddr_in serveraddr,
 /*
  * sendAndReceiveReliably - handles the reliability aspect of sending and receiving data to/from the server respectively
  */
-int sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
-		int serverlen, struct sockaddr_in serveraddr) {
+transfer_packet* sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
+		socklen_t serverlen, struct sockaddr_in serveraddr) {
 	struct timeval wait;
 	fd_set readTemplate;
-	int n, sentSize;
+	int n;
 	transfer_packet *response = (transfer_packet*) malloc(
 			sizeof(transfer_packet));
 	while (1) {
@@ -297,7 +289,7 @@ int sendAndReceiveReliably(int sockfd, char *action, int sizeToBeSent,
 			break;
 		}
 	}
-	return 1;
+	return response;
 }
 /*
  * writeIntoFile - handles writing to file after getting data from the server
@@ -311,7 +303,7 @@ int writeIntoFile(char *buf, char *fileName, int n) {
 		writingIntoFile = fwrite(buf, 1, n, openingFileForWriting);
 		fflush(openingFileForWriting);
 		printf(" \n \n Wrote %d out of %d into file \n \n", writingIntoFile,
-				strlen(buf));
+				n);
 		if (writingIntoFile < 0) {
 			printf("\n\n The file sequence cannot be written \n\n");
 			return -1;
