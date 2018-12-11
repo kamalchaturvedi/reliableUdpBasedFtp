@@ -23,10 +23,6 @@ What works :
 
 The current client server model works for all the 5 tasks above (I have transferred a 8 MB file without a drop in packet, when both client & server are in different remote VMs)
 
-What doesnt work :
-
-* The only files I can transfer are text files i.e. of type .txt, .c, .java etc, but no binary files can be transferred(jpeg, mp3 etc)
-
 How to create output files:
 
 * Run the makefile in client or server folder by, typing
